@@ -1,0 +1,9 @@
+## Interface: 11200
+## Title: SimpleInfoBar
+## Notes: Простая инфо-панель: местность, деньги и свободные слоты в сумках.
+## Notes-ruRU: Простая инфо-панель: местность, деньги и свободные слоты в сумках.
+## Author: Андрей
+## Version: 1.0.0
+## SavedVariables: SimpleInfoBarDB
+
+SimpleInfoBar.lua
