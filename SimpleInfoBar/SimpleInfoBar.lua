@@ -1,14 +1,14 @@
 --[[--------------------------------------------------------------------
-  SimpleInfoBar 1.0.0
-  Компактная панель: местность, деньги, сумки, сеть, профессии, память.
-  Клиент 1.12.1 / Lua 5.1 (Emberveil). Языки интерфейса: ru / en.
+  SimpleInfoBar 1.0.1
+  A compact bar: zone, money, bags, network, professions, memory.
+  Client 1.12.1 / Lua 5.1 (Emberveil). Interface languages: ru / en.
 ----------------------------------------------------------------------]]
 
 local ADDON   = "SimpleInfoBar"
-local VERSION = "1.0.0"
+local VERSION = "1.0.1"
 
-local FIRST_BAG, LAST_BAG = 0, 4      -- рюкзак + 4 экипированные сумки
-local LOW_FREE, WARN_FREE = 3, 8      -- пороги подсветки
+local FIRST_BAG, LAST_BAG = 0, 4      -- backpack plus 4 equipped bags
+local LOW_FREE, WARN_FREE = 3, 8      -- highlight thresholds
 
 local COLOR_OK   = { 1.00, 1.00, 1.00 }
 local COLOR_WARN = { 1.00, 0.82, 0.00 }
@@ -22,12 +22,12 @@ local defaults = {
   labels = true, lang = "auto",
   showZone = true, showMoney = true, showBags = true,
   showNet = true, showProf = true, showMem = true,
-  profBad = 10, profWarn = 25,   -- очков до потолка: красный / жёлтый
+  profBad = 10, profWarn = 25,   -- points left before the cap: red / yellow
   order = "zone,money,bags,net,prof,mem",
 }
 
 ----------------------------------------------------------------------
--- локализация
+-- localisation
 ----------------------------------------------------------------------
 
 local STRINGS = {
@@ -130,7 +130,7 @@ local function L(key)
 end
 
 ----------------------------------------------------------------------
--- состояние
+-- state
 ----------------------------------------------------------------------
 
 local frame, text
@@ -139,7 +139,7 @@ local freeSlots, totalSlots = 0, 0
 
 local DEFAULT_ORDER = { "zone", "money", "bags", "net", "prof", "mem" }
 
--- порядок держим строкой в сохранениях: так он переживает любые правки таблиц
+-- the order lives in saved variables as a string: that survives table edits
 local function OrderList()
   local raw = SimpleInfoBarDB and SimpleInfoBarDB.order or "zone,money,bags,net,prof,mem"
   local list, n = {}, 0
@@ -151,7 +151,7 @@ local function OrderList()
     rest = tail
     if rest == "" then break end
   end
-  -- страховка: добавляем всё, что потерялось
+  -- safety net: append anything that went missing
   local k = 1
   while DEFAULT_ORDER[k] do
     local found, j = false, 1
@@ -175,7 +175,7 @@ local function SaveOrder(list, n)
   SimpleInfoBarDB.order = out
 end
 
--- поднять блок на одну позицию вверх
+-- move a block one position up
 local function MoveUp(key)
   local list, n = OrderList()
   local i = 2
@@ -196,7 +196,7 @@ local function Print(msg)
 end
 
 ----------------------------------------------------------------------
--- данные
+-- data
 ----------------------------------------------------------------------
 
 -- медь -> "12g 34s 56c" с цветами
@@ -211,7 +211,7 @@ local function FormatMoney(copper)
   return out .. "|cffeda55f" .. c .. "c|r"
 end
 
--- свободные и общие слоты в сумках 0-4
+-- free and total slots across bags 0-4
 local function ScanBags()
   local free, total = 0, 0
   local bag = FIRST_BAG
@@ -235,7 +235,7 @@ local function ScanBags()
 end
 
 ----------------------------------------------------------------------
--- отрисовка
+-- drawing
 ----------------------------------------------------------------------
 
 local function Label(key)
@@ -243,14 +243,14 @@ local function Label(key)
   return LABEL_COLOR .. L(key) .. "|r "
 end
 
--- блок «местность»: зона и, если есть, подзона
+-- the zone block: zone and, when there is one, subzone
 local function SegZone()
   local zone = ""
   if GetZoneText then zone = GetZoneText() or "" end
 
   local sub = nil
   if GetSubZoneText then sub = GetSubZoneText() end
-  -- GetSubZoneText не возвращает НИЧЕГО, когда подзоны нет (не пустую строку)
+  -- GetSubZoneText returns NOTHING when there is no subzone (not an empty string)
   if sub == nil then sub = "" end
 
   if zone == "" and sub == "" then return nil end
@@ -279,7 +279,7 @@ local function SegBags(free, total)
     math.floor(color[3] * 255), free, total)
 end
 
--- зелёный -> жёлтый -> красный
+-- green -> yellow -> red
 local COLOR_GOOD = "|cff40ff40"
 local COLOR_WARN = "|cffffd200"
 local COLOR_BAD  = "|cffff4040"
@@ -295,7 +295,7 @@ local function Tint(value, good, warn, higherIsBetter)
   return COLOR_BAD
 end
 
--- FPS и задержка
+-- FPS and latency
 local function SegNet()
   local fps = 0
   if GetFramerate then fps = GetFramerate() or 0 end
@@ -303,7 +303,7 @@ local function SegNet()
 
   local lag = 0
   if GetNetStats then
-    -- этот клиент возвращает ТРИ значения: вход, исход, задержка
+    -- this client returns THREE values: inbound, outbound, latency
     local _, _, ms = GetNetStats()
     lag = ms or 0
   end
@@ -315,20 +315,20 @@ local function SegNet()
     .. Tint(lag, 100, 250, false) .. lag .. "|r|cff808080 ms|r"
 end
 
--- Известные вспомогательные профессии. Список нужен, только чтобы опознать
--- КАТЕГОРИЮ: достаточно одного совпадения, дальше берётся вся категория целиком.
--- Поэтому переименование отдельного навыка ничего не ломает.
+-- Known secondary professions. The list only serves to recognise the CATEGORY:
+-- one match is enough, after which the whole category is taken. Renaming an
+-- individual skill therefore breaks nothing.
 local SECONDARY_HINTS = {
   ["Cooking"] = true, ["First Aid"] = true, ["Fishing"] = true,
   ["Кулинария"] = true, ["Первая помощь"] = true,
   ["Рыбная ловля"] = true, ["Рыболовство"] = true, ["Рыбалка"] = true,
 }
 
--- Возвращает набор категорий, которые считаем профессиями:
---   основные  — в категории есть навык, который можно забыть (isAbandonable);
---   вспомогательные — в категории есть навык из списка выше.
--- Навыки оружия, языки, классовые умения и владение бронёй под эти признаки
--- не подходят и в панель не попадают.
+-- Returns the set of categories treated as professions:
+--   primary   -- the category holds a skill that can be unlearned (isAbandonable);
+--   secondary -- the category holds a skill from the list above.
+-- Weapon skills, languages, class abilities and armor proficiencies match
+-- neither test and never reach the bar.
 local function ProfessionCategories()
   local cats = {}
   if not GetNumSkillLines or not GetSkillLineInfo then return cats end
@@ -352,9 +352,10 @@ local function ProfessionCategories()
   return cats
 end
 
--- Цвет по остатку очков до потолка. Пороги абсолютные, а не в процентах:
--- блокирует именно потолок, и 30 очков до 225 так же срочно, как 30 до 75.
--- По умолчанию 10 и 25 — примерно седьмая часть и треть ступени в 75 очков.
+-- Colour by the points left before the cap. The thresholds are absolute rather
+-- than relative: the cap is what blocks you, and 30 points short of 225 is as
+-- urgent as 30 short of 75. The defaults 10 and 25 are roughly a seventh and a
+-- third of the 75 point tier.
 local function ProfTint(rank, maxRank)
   local left = maxRank - rank
   local bad  = SimpleInfoBarDB.profBad  or 10
@@ -390,8 +391,8 @@ local function SegProf()
   return Label("prof") .. out
 end
 
--- Память скриптов. GetScriptMemory отдаёт целые мегабайты с округлением вниз,
--- поэтому при малом расходе берём точное значение у сборщика мусора.
+-- Script memory. GetScriptMemory reports whole megabytes rounded down, so for
+-- small numbers the exact value is taken from the garbage collector instead.
 local function SegMem()
   local mb = 0
   if GetScriptMemory then mb = GetScriptMemory() or 0 end
@@ -482,7 +483,7 @@ local function SavePosition()
 end
 
 ----------------------------------------------------------------------
--- контекстное меню (правая кнопка)
+-- context menu (right click)
 ----------------------------------------------------------------------
 
 local menu, menuTitle
@@ -498,7 +499,7 @@ local function HideMenu()
   if menu then menu:Hide() end
 end
 
--- описание пунктов строится заново при каждом открытии: подписи зависят от состояния
+-- the entries are rebuilt on every open: their labels depend on current state
 local function MenuItems()
   local items, count = {}, 0
 
@@ -627,7 +628,7 @@ local function BuildMenu()
   end
   menuTitle:SetJustifyH("LEFT")
 
-  -- меню само закрывается, когда мышь ушла и с панели, и с него
+  -- the menu closes itself once the mouse has left both the bar and the menu
   menu:SetScript("OnUpdate", function(self, elapsed)
     local e = elapsed or arg1 or 0
     if hoverCount > 0 then
@@ -676,7 +677,7 @@ local function ShowMenu()
       if item.header then return end
       item.action()
       if item.keep then
-        ShowMenu()          -- перерисовать галочки
+        ShowMenu()          -- redraw the check marks
       else
         HideMenu()
       end
@@ -686,7 +687,7 @@ local function ShowMenu()
     i = i + 1
   end
 
-  -- лишние кнопки из прошлого показа прячем
+  -- hide buttons left over from the previous open
   local j = n + 1
   while menuButtons[j] do
     menuButtons[j]:Hide()
@@ -706,7 +707,7 @@ local function ToggleMenu()
 end
 
 ----------------------------------------------------------------------
--- создание панели
+-- building the bar
 ----------------------------------------------------------------------
 
 local function BuildFrame()
@@ -750,7 +751,7 @@ local function BuildFrame()
     SavePosition()
   end
 
-  -- два пути захвата: RegisterForDrag (порог 15 px) и прямое нажатие мыши
+  -- two ways to grab it: RegisterForDrag (15 px threshold) and a direct mouse press
   frame:SetScript("OnDragStart", BeginMove)
   frame:SetScript("OnDragStop",  EndMove)
 
@@ -792,7 +793,7 @@ local function BuildFrame()
     if GameTooltip then GameTooltip:Hide() end
   end)
 
-  -- страховочный опрос: имена событий клиента не документированы
+  -- safety poll: the client's event names are not documented
   frame:SetScript("OnUpdate", function(self, elapsed)
     local e = elapsed or arg1 or 0
     timer = timer + e
@@ -808,7 +809,7 @@ local function BuildFrame()
 end
 
 ----------------------------------------------------------------------
--- слэш-команды
+-- slash commands
 ----------------------------------------------------------------------
 
 local function HandleSlash(msg)
@@ -948,7 +949,7 @@ local function HandleSlash(msg)
 end
 
 ----------------------------------------------------------------------
--- события
+-- events
 ----------------------------------------------------------------------
 
 local function InitDB()
