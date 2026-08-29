@@ -22,6 +22,7 @@ local defaults = {
   labels = true, lang = "auto",
   showZone = true, showMoney = true, showBags = true,
   showNet = true, showProf = true, showMem = true,
+  profBad = 10, profWarn = 25,   -- очков до потолка: красный / жёлтый
   order = "zone,money,bags,net,prof,mem",
 }
 
@@ -40,6 +41,8 @@ local STRINGS = {
     mNet       = "Сеть (FPS и задержка)",
     mProf      = "Профессии",
     mMem       = "Память аддонов",
+    profSet    = "пороги профессий: красный < %d, жёлтый < %d",
+    profErr    = "укажите число, например: /sib profwarn 25",
     tipFree    = "Свободно %d из %d слотов",
     tipLocked  = "Закреплена — /sib unlock",
     tipDrag    = "Тяните левой кнопкой мыши",
@@ -55,7 +58,7 @@ local STRINGS = {
     reset      = "позиция сброшена.",
     posSet     = "позиция задана: %d вправо, %d вниз от верха экрана.",
     posErr     = "укажите два числа, например: /sib pos 0 -20",
-    help       = "команды: /sib [menu | zone | money | bags | net | prof | mem | show | hide | toggle | lock | unlock | bg | labels | lang ru/en/auto | pos X Y | reset | debug]",
+    help       = "команды: /sib [menu | zone | money | bags | net | prof | mem | profwarn N | profbad N | show | hide | toggle | lock | unlock | bg | labels | lang ru/en/auto | pos X Y | reset | debug]",
     mLabels    = "Подписи",
     mShow      = "Показывать",
     mOrder     = "Порядок (клик — вверх)",
@@ -80,6 +83,8 @@ local STRINGS = {
     mNet       = "Net (FPS and latency)",
     mProf      = "Professions",
     mMem       = "Addon memory",
+    profSet    = "profession thresholds: red < %d, yellow < %d",
+    profErr    = "give a number, for example: /sib profwarn 25",
     tipFree    = "%d of %d slots free",
     tipLocked  = "Locked — /sib unlock",
     tipDrag    = "Drag with the left mouse button",
@@ -95,7 +100,7 @@ local STRINGS = {
     reset      = "position reset.",
     posSet     = "position set: %d right, %d down from screen top.",
     posErr     = "give two numbers, for example: /sib pos 0 -20",
-    help       = "commands: /sib [menu | zone | money | bags | net | prof | mem | show | hide | toggle | lock | unlock | bg | labels | lang ru/en/auto | pos X Y | reset | debug]",
+    help       = "commands: /sib [menu | zone | money | bags | net | prof | mem | profwarn N | profbad N | show | hide | toggle | lock | unlock | bg | labels | lang ru/en/auto | pos X Y | reset | debug]",
     mLabels    = "Labels",
     mShow      = "Show",
     mOrder     = "Order (click to move up)",
@@ -310,21 +315,72 @@ local function SegNet()
     .. Tint(lag, 100, 250, false) .. lag .. "|r|cff808080 ms|r"
 end
 
--- Основные профессии. Отбираем по isAbandonable: забыть можно только их,
--- поэтому фильтр не зависит от языка клиента и от названий заголовков.
+-- Известные вспомогательные профессии. Список нужен, только чтобы опознать
+-- КАТЕГОРИЮ: достаточно одного совпадения, дальше берётся вся категория целиком.
+-- Поэтому переименование отдельного навыка ничего не ломает.
+local SECONDARY_HINTS = {
+  ["Cooking"] = true, ["First Aid"] = true, ["Fishing"] = true,
+  ["Кулинария"] = true, ["Первая помощь"] = true,
+  ["Рыбная ловля"] = true, ["Рыболовство"] = true, ["Рыбалка"] = true,
+}
+
+-- Возвращает набор категорий, которые считаем профессиями:
+--   основные  — в категории есть навык, который можно забыть (isAbandonable);
+--   вспомогательные — в категории есть навык из списка выше.
+-- Навыки оружия, языки, классовые умения и владение бронёй под эти признаки
+-- не подходят и в панель не попадают.
+local function ProfessionCategories()
+  local cats = {}
+  if not GetNumSkillLines or not GetSkillLineInfo then return cats end
+
+  local total = GetNumSkillLines() or 0
+  local current = nil
+  local i = 1
+  while i <= total do
+    local name, header, _, _, _, _, maxRank, abandonable = GetSkillLineInfo(i)
+    if header == 1 then
+      current = name
+    elseif current and name then
+      if abandonable == 1 then
+        cats[current] = true
+      elseif SECONDARY_HINTS[name] and maxRank and maxRank > 1 then
+        cats[current] = true
+      end
+    end
+    i = i + 1
+  end
+  return cats
+end
+
+-- Цвет по остатку очков до потолка. Пороги абсолютные, а не в процентах:
+-- блокирует именно потолок, и 30 очков до 225 так же срочно, как 30 до 75.
+-- По умолчанию 10 и 25 — примерно седьмая часть и треть ступени в 75 очков.
+local function ProfTint(rank, maxRank)
+  local left = maxRank - rank
+  local bad  = SimpleInfoBarDB.profBad  or 10
+  local warn = SimpleInfoBarDB.profWarn or 25
+  if left < bad then return COLOR_BAD end
+  if left < warn then return COLOR_WARN end
+  return "|cffffffff"
+end
+
 local function SegProf()
   if not GetNumSkillLines or not GetSkillLineInfo then return nil end
 
+  local cats = ProfessionCategories()
   local total = GetNumSkillLines() or 0
-  local out, count = "", 0
+  local out, count, current = "", 0, nil
+
   local i = 1
   while i <= total do
-    local name, header, _, rank, _, _, maxRank, abandonable = GetSkillLineInfo(i)
-    if name and header == nil and abandonable == 1 and maxRank and maxRank > 1 then
+    local name, header, _, rank, _, _, maxRank = GetSkillLineInfo(i)
+
+    if header == 1 then
+      current = name
+    elseif name and maxRank and maxRank > 1 and current and cats[current] then
       if count > 0 then out = out .. " |cff5a5a5a·|r " end
-      local tint = "|cffffffff"
-      if rank >= maxRank then tint = COLOR_WARN end   -- упёрлись в потолок, пора к учителю
-      out = out .. "|cffd0d0d0" .. name .. "|r " .. tint .. rank .. "|r|cff808080/" .. maxRank .. "|r"
+      out = out .. "|cffd0d0d0" .. name .. "|r "
+        .. ProfTint(rank, maxRank) .. rank .. "|r|cff808080/" .. maxRank .. "|r"
       count = count + 1
     end
     i = i + 1
@@ -808,6 +864,17 @@ local function HandleSlash(msg)
     SimpleInfoBarDB.showMem = not SimpleInfoBarDB.showMem
     dirty = true
     Print(L("mMem") .. ": " .. (SimpleInfoBarDB.showMem and "on" or "off"))
+
+  elseif string.sub(msg, 1, 8) == "profwarn" or string.sub(msg, 1, 7) == "profbad" then
+    local _, _, key, val = string.find(msg, "^(prof%a+)%s+(%d+)$")
+    val = tonumber(val)
+    if val and val >= 0 and val <= 300 then
+      if key == "profbad" then SimpleInfoBarDB.profBad = val else SimpleInfoBarDB.profWarn = val end
+      dirty = true
+      Print(string.format(L("profSet"), SimpleInfoBarDB.profBad, SimpleInfoBarDB.profWarn))
+    else
+      Print(L("profErr"))
+    end
 
   elseif msg == "bg" then
     SimpleInfoBarDB.background = not SimpleInfoBarDB.background
